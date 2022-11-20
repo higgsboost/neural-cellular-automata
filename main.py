@@ -12,7 +12,7 @@ from dataclasses import dataclass
 @dataclass
 class Config:
     state_grid_w: int = 50 
-    state_grid_h: int = 50 
+    state_grid_h: int = 20 
     kernel_size: int = 3
     alpha_channel: int = 3
     pv_len: int = 16 # Length of perception vector
@@ -43,7 +43,6 @@ def conv2d(x, kernel):
     x = jnp.transpose(x, [0, 2, 3, 1])
     return x
 
-@jax.jit
 def perceive(state_grid):
     state_grid = state_grid[jnp.newaxis, ...]
     sobel_x = jnp.array([
@@ -126,23 +125,38 @@ tx = optax.adam(0.001)
 state = train_state.TrainState.create(apply_fn=model.apply,
                                       params=params,
                                       tx=tx)
- 
-def run_one(key, state, state_grid, num_steps):
 
+def CA(key, model, params, x):
+    pg = jax.lax.stop_gradient(perceive(x))
+    ds = update(model, params, pg)
+    x = jax.lax.stop_gradient(stochastic_update(key, x, ds))
+    x = jax.lax.stop_gradient(alive_masking(x))
+    return x
+
+
+
+def run_one(key, state, state_grid, target, num_steps):
+    @jax.jit
     def loss_fn(params):
         x = state_grid
         _key = key
         for _ in range(num_steps):
-            pg = perceive(x)
-            ds = update(model, params, pg)
-            x= stochastic_update(_key, x, ds)
-            x = alive_masking(x)
-
+            x = CA(_key, model, state.params, x) 
             _key, _ = jax.random.split(_key)
-        return state_grid
+
+            loss = jnp.mean(jnp.square(x[..., :3] - target))
+
+        return loss, 0
     
     loss, grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
-run_one(key, state, state_grid, 96)
+    
+    state = state.apply_gradients(grads=grads)
+    return state
+
+
+target = cv2.imread('emoji.jpg')
+target = cv2.resize(target, (config.state_grid_w, config.state_grid_h))/255.
+run_one(key, state, state_grid, target, 96)
 
 #params = init_network_params([16*2 + 16, 128, 16], key)
 '''
