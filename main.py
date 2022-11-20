@@ -42,7 +42,7 @@ def conv2d(x, kernel):
     x = jax.lax.conv(x, kernel, (1, 1), "SAME") 
     x = jnp.transpose(x, [0, 2, 3, 1])
     return x
-
+@jax.jit
 def perceive(state_grid):
     state_grid = state_grid[jnp.newaxis, ...]
     sobel_x = jnp.array([
@@ -54,8 +54,6 @@ def perceive(state_grid):
     sobel_y = jnp.transpose(sobel_x, [1, 0, 2, 3])
 
 
-    print('soble_x :', sobel_x.shape)
-    print('soble_y :', sobel_y.shape)
    
     grad_x = jax.vmap(lambda state_grid: conv2d(state_grid, sobel_x), in_axes=(-1,))(state_grid)
     grad_x = jnp.transpose(grad_x, [1, 2, 3, 4, 0])
@@ -75,11 +73,11 @@ def perceive(state_grid):
 
 def stochastic_update(key, state_grid, ds):
     mask = jax.random.uniform(key, state_grid.shape[:-1])
-    print('mask shape', mask.shape)
     ds = mask[..., jnp.newaxis] * ds 
     state_grid = state_grid + ds
     return state_grid
 
+@jax.jit
 def alive_masking(state_grid):
     alive = jax.lax.reduce_window(state_grid[..., 3], 0., jax.lax.max, (3,3,), (1,1,), 'SAME')    
     alive = alive > 0.1 
@@ -143,20 +141,25 @@ def run_one(key, state, state_grid, target, num_steps):
         for _ in range(num_steps):
             x = CA(_key, model, state.params, x) 
             _key, _ = jax.random.split(_key)
-
-            loss = jnp.mean(jnp.square(x[..., :3] - target))
-
-        return loss, 0
+        loss = jnp.mean(jnp.square(x[..., :3] - target))
+        #jax.debug.breakpoint()
+        return loss, x 
     
-    loss, grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
-    
+    (loss, final_img), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+     
     state = state.apply_gradients(grads=grads)
+
+    print(f'Loss : {loss}')
+    draw(final_img)
     return state
 
 
 target = cv2.imread('emoji.jpg')
 target = cv2.resize(target, (config.state_grid_w, config.state_grid_h))/255.
-run_one(key, state, state_grid, target, 96)
+
+for i in range(10):
+    state = run_one(key, state, state_grid, target, 20)
+    key, _ = jax.random.split(key)
 
 #params = init_network_params([16*2 + 16, 128, 16], key)
 '''
